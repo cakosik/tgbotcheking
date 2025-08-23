@@ -8,7 +8,7 @@ from aiogram.filters import Command
 import asyncio
 
 # === НАСТРОЙКИ ===
-API_TOKEN = "ТОКЕН_ТВОЕГО_БОТА"
+API_TOKEN = "7919356847:AAHHdCT180UMA4cNpwOWNFPwILIRFDLu2E0"
 
 # Для Termux путь указывать НЕ нужно
 # Для Windows было бы так:
@@ -137,3 +137,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
