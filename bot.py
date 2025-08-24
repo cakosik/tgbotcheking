@@ -7,6 +7,9 @@
 # - /reset — очистка статистики
 # - /prices — показать тарифы
 # - /setprice 100-200 60 — изменить цену для диапазона (создаст, если его не было)
+# - /editstat <id> <views> — изменить запись в статистике (пересчитать по тарифам)
+# - /calc <views> — калькулятор (без записи в статистику)
+# - красивый /start с фото, списком команд и inline-кнопками (Статистика/Помощь/Тарифы)
 # - хранение в SQLite (bot.db), всё сохраняется между перезапусками
 
 import asyncio
@@ -20,12 +23,13 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from PIL import Image
 import pytesseract
 
 # =================== НАСТРОЙКИ ===================
-API_TOKEN = "7919356847:AAHHdCT180UMA4cNpwOWNFPwILIRFDLu2E0"     # ← вставьте токен
-ADMINS = [8183369219, 6194786755]          # ← два Telegram user_id, только им бот отвечает
+API_TOKEN = "ТОКЕН_СЮДА"            # ← вставь токен сюда
+ADMINS = [8183369219, 6194786755]   # ← два Telegram user_id, только им бот отвечает
 
 # Для Termux путь указывать не нужно, но зафиксируем бинарник
 pytesseract.pytesseract.tesseract_cmd = "tesseract"
@@ -117,7 +121,7 @@ def add_stat_row(views: int, price: int):
 
 def get_all_stats():
     conn = db_connect()
-    rows = conn.execute("SELECT views, price, ts FROM stats ORDER BY id ASC").fetchall()
+    rows = conn.execute("SELECT id, views, price, ts FROM stats ORDER BY id ASC").fetchall()
     totals = conn.execute("SELECT COALESCE(SUM(views),0) AS tv, COALESCE(SUM(price),0) AS tr FROM stats").fetchone()
     conn.close()
     return rows, int(totals["tv"]), int(totals["tr"])
@@ -127,6 +131,22 @@ def reset_all_stats():
     conn.execute("DELETE FROM stats")
     conn.commit()
     conn.close()
+
+def update_stat_row(row_id: int, new_views: int) -> bool:
+    """
+    Обновляет запись статистики: ставит новое число просмотров и пересчитывает price по тарифам.
+    Возвращает True/False — изменено ли что-то.
+    """
+    new_price = get_price_for_views(new_views)
+    if new_price == 0:
+        return False
+    conn = db_connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE stats SET views=?, price=? WHERE id=?", (new_views, new_price, row_id))
+    conn.commit()
+    changed = cur.rowcount > 0
+    conn.close()
+    return changed
 
 
 # =================== УТИЛИТЫ ===================
@@ -186,8 +206,7 @@ async def process_views_and_reply(message: types.Message, views_list: list[int])
     if added_lines:
         header = "✅ Добавлено:\n"
         body = "\n".join(added_lines)
-        summary = f"\n\n📊 Итого за добавление:\n👁 {total_views} просмотров\n💰 {total_rub} руб"
-        text = header + body + summary
+        text = header + body
         # делим на куски, чтобы не уткнуться в лимит 4096 символов
         for i in range(0, len(text), 3500):
             await message.answer(text[i:i+3500])
@@ -195,26 +214,56 @@ async def process_views_and_reply(message: types.Message, views_list: list[int])
         await message.answer("⚠️ Нашёл числа, но ни одно не попало в тарифы.")
 
 
-# =================== ХЕНДЛЕРЫ ===================
+# =================== ХЕНДЛЕРЫ КОМАНД ===================
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     if not is_admin(message.from_user.id):
         return
+
+    # Кнопки под стартом
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📊 Статистика", callback_data="show_stats")
+    kb.button(text="ℹ️ Помощь", callback_data="show_help")
+    kb.button(text="💰 Тарифы", callback_data="show_prices")
+    kb.adjust(1)
+
+    photo_url = "https://i.ibb.co/rxSZmLC/start-banner.jpg"  # можно заменить на свой
     tariffs_text = "\n".join([f"{mn}-{mx} просмотров = {pr} руб" for mn, mx, pr in tariffs_all()])
-    await message.answer(
-        "👋 Привет! Я бот для подсчёта стоимости просмотров.\n\n"
-        "📊 Текущие тарифы (за одно видео):\n"
-        f"{tariffs_text or '— (тарифов нет)'}\n\n"
-        "⚡ Команды:\n"
-        "/ping — проверить пинг\n"
-        "/stat — показать всю статистику (аналог /stats)\n"
-        "/stats — показать всю статистику\n"
-        "/reset — очистить статистику\n"
-        "/prices — показать тарифы\n"
-        "/setprice <min>-<max> <price> — изменить/создать тариф диапазона\n\n"
-        "💡 Отправь число просмотров (можно несколько через пробел/запятые/новые строки)\n"
-        "или пришли скрин — я распознаю и всё посчитаю."
+
+    await message.answer_photo(
+        photo=photo_url,
+        caption=(
+            "👋 <b>Привет!</b> Я бот для подсчёта стоимости просмотров.\n\n"
+            "⚡ <b>Команды:</b>\n"
+            "/ping — проверить пинг\n"
+            "/stat, /stats — показать статистику\n"
+            "/reset — очистить статистику\n"
+            "/prices — тарифы\n"
+            "/setprice — изменить тариф\n"
+            "/editstat — изменить запись\n"
+            "/calc — калькулятор\n"
+            "/help — помощь\n\n"
+            f"📊 <b>Текущие тарифы:</b>\n{tariffs_text or '— (тарифов нет)'}"
+        ),
+        reply_markup=kb.as_markup()
     )
+
+@dp.message(Command("help"))
+async def help_cmd(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    text = (
+        "📖 <b>Справка по командам:</b>\n\n"
+        "• /ping — показать задержку бота.\n"
+        "• /stat или /stats — вся статистика добавлений.\n"
+        "• /reset — очистить статистику.\n"
+        "• /prices — список тарифов.\n"
+        "• /setprice <min>-<max> <price> — изменить/создать тариф.\n"
+        "• /editstat <id> <views> — изменить число просмотров в записи; цена пересчитается по тарифам.\n"
+        "• /calc <views> — калькулятор (узнать цену, без записи в статистику).\n\n"
+        "💡 Отправь число просмотров (можно несколько в одном сообщении) или пришли скрин — я распознаю и посчитаю."
+    )
+    await message.answer(text)
 
 @dp.message(Command("ping"))
 async def ping_cmd(message: types.Message):
@@ -272,8 +321,8 @@ async def stat_cmd(message: types.Message):
         await message.answer("📊 Статистика пуста.")
         return
     lines = []
-    for idx, r in enumerate(rows, 1):
-        lines.append(f"{idx}. {r['views']} просмотров = {r['price']} руб  ({r['ts']})")
+    for r in rows:
+        lines.append(f"#{r['id']}. {r['views']} просмотров = {r['price']} руб  ({r['ts']})")
     text = "\n".join(lines)
     text += f"\n\n📊 ИТОГО:\n👁 Просмотров: {total_views}\n💰 Сумма: {total_rub} руб"
     for i in range(0, len(text), 3500):
@@ -285,6 +334,38 @@ async def reset_cmd(message: types.Message):
         return
     reset_all_stats()
     await message.answer("♻️ Статистика очищена.")
+
+@dp.message(Command("editstat"))
+async def editstat_cmd(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        _, row_id, new_views = message.text.split()
+        row_id, new_views = int(row_id), int(new_views)
+    except Exception:
+        await message.answer("Использование: <code>/editstat <id> <views></code>")
+        return
+    ok = update_stat_row(row_id, new_views)
+    if ok:
+        await message.answer(f"✏️ Запись #{row_id} обновлена на {new_views} просмотров (цена пересчитана).")
+    else:
+        await message.answer("❌ Ошибка: записи с таким ID нет или нет тарифа для этих просмотров.")
+
+@dp.message(Command("calc"))
+async def calc_cmd(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        views = int(message.text.split()[1])
+    except Exception:
+        await message.answer("Использование: <code>/calc 1234</code>")
+        return
+    price = get_price_for_views(views)
+    if price > 0:
+        await message.answer(f"🔢 {views} просмотров = {price} руб (по тарифам)")
+    else:
+        await message.answer("⚠️ Нет подходящего тарифа для такого числа просмотров.")
+
 
 # ---------- Ручной ввод чисел (одно или много в одном сообщении) ----------
 @dp.message(F.text)
@@ -320,6 +401,58 @@ async def handle_photo(message: types.Message):
         await process_views_and_reply(message, views_list)
     except Exception as e:
         await message.answer(f"❌ Ошибка обработки фото: {e}")
+
+
+# =================== CALLBACK-КНОПКИ ПОД /start ===================
+@dp.callback_query(F.data == "show_stats")
+async def cb_stats(callback: types.CallbackQuery):
+    # защита: только админ
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    rows, total_views, total_rub = get_all_stats()
+    if not rows:
+        await callback.message.answer("📊 Статистика пуста.")
+    else:
+        lines = []
+        for r in rows:
+            lines.append(f"#{r['id']}. {r['views']} просмотров = {r['price']} руб  ({r['ts']})")
+        text = "\n".join(lines)
+        text += f"\n\n📊 ИТОГО:\n👁 Просмотров: {total_views}\n💰 Сумма: {total_rub} руб"
+        # на всякий случай ограничим в одно сообщение
+        for i in range(0, len(text), 3500):
+            await callback.message.answer(text[i:i+3500])
+    await callback.answer()
+
+@dp.callback_query(F.data == "show_help")
+async def cb_help(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    text = (
+        "📖 <b>Справка:</b>\n\n"
+        "• /ping — задержка.\n"
+        "• /stat — вся статистика.\n"
+        "• /reset — очистить статистику.\n"
+        "• /prices — тарифы.\n"
+        "• /setprice — создать/изменить тариф.\n"
+        "• /editstat — изменить запись.\n"
+        "• /calc — калькулятор.\n\n"
+        "💡 Можно кидать просто число или скрин."
+    )
+    await callback.message.answer(text)
+    await callback.answer()
+
+@dp.callback_query(F.data == "show_prices")
+async def cb_prices(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    t = "\n".join([f"{mn}-{mx} просмотров = {pr} руб" for mn, mx, pr in tariffs_all()])
+    await callback.message.answer("📋 Текущие тарифы:\n" + (t or "— (нет тарифов)"))
+    await callback.answer()
+
 
 # =================== ЗАПУСК ===================
 async def main():
