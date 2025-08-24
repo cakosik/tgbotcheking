@@ -28,7 +28,7 @@ from PIL import Image
 import pytesseract
 
 # =================== НАСТРОЙКИ ===================
-API_TOKEN = "ТОКЕН_СЮДА"            # ← вставь токен сюда
+API_TOKEN = "8376117469:AAGowNR9l6-BJXTmJ2mdHD_50QP-Whf0Q5k"            # ← вставь токен сюда
 ADMINS = [8183369219, 6194786755]   # ← два Telegram user_id, только им бот отвечает
 
 # Для Termux путь указывать не нужно, но зафиксируем бинарник
@@ -462,3 +462,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
